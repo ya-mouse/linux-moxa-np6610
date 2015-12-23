@@ -612,12 +612,14 @@ static inline int pipelined_send(struct msg_queue *msq, struct msg_msg *msg)
 					       msr->r_msgtype, msr->r_mode)) {
 
 			list_del(&msr->r_list);
+#if 0	// mask by Victor Yu. 03-02-2007
 			if (msr->r_maxsize < msg->m_ts) {
 				msr->r_msg = NULL;
 				wake_up_process(msr->r_tsk);
 				smp_mb();
 				msr->r_msg = ERR_PTR(-E2BIG);
 			} else {
+#endif
 				msr->r_msg = NULL;
 				msq->q_lrpid = task_pid_vnr(msr->r_tsk);
 				msq->q_rtime = get_seconds();
@@ -626,7 +628,9 @@ static inline int pipelined_send(struct msg_queue *msq, struct msg_msg *msg)
 				msr->r_msg = msg;
 
 				return 1;
+#if 0	// mask by Victor Yu. 03-02-2007
 			}
+#endif
 		}
 	}
 	return 0;

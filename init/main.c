@@ -490,6 +490,25 @@ asmlinkage void __init start_kernel(void)
 	setup_command_line(command_line);
 	setup_nr_cpu_ids();
 	setup_per_cpu_areas();
+#if 1   // add by Victor Yu. for debug using 07-27-2007, Fraddy tell me this issue
+	{
+	int     tlb, entry, way, rd, index;
+	rd = 0xF9400003;        // garbage address for lock
+	for ( tlb=0; tlb<2; tlb++ ) {
+		for (way=0; way<4; way++ ) {
+			for (entry=0; entry<16; entry++ ) {
+				index = ((tlb << 24) | (way << 22) | (entry << 18)) & 0x1FC0000;
+				asm("mcr p15, 4, %0, c15, c0, 1"
+					:
+					: "r" (index));
+				asm("mcr p15, 4, %0, c15, c6, 0"
+					:
+					: "r" (rd));
+			}
+		}
+	}
+	}
+#endif
 	smp_prepare_boot_cpu();	/* arch-specific boot-cpu hooks */
 
 	build_all_zonelists(NULL);

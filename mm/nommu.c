@@ -821,13 +821,17 @@ struct vm_area_struct *find_vma(struct mm_struct *mm, unsigned long addr)
 	for (n = rb_first(&mm->mm_rb); n; n = rb_next(n)) {
 		vma = rb_entry(n, struct vm_area_struct, vm_rb);
 		if (vma->vm_start > addr)
-			return NULL;
+			break; // Mask by Victor
 		if (vma->vm_end > addr) {
 			mm->mmap_cache = vma;
 			return vma;
 		}
 	}
 
+#if 1	// mask by Victor Yu. 03-03-2007
+	printk("munmap of non-mmaped memory by process %d (%s): %p\n",
+	       current->pid, current->comm, (void *) addr);
+#endif
 	return NULL;
 }
 EXPORT_SYMBOL(find_vma);
@@ -908,9 +912,11 @@ static int validate_mmap_request(struct file *file,
 		return -EINVAL;
 	}
 
+#if 0	// add by Victor Yu. 01-07-2008
 	if ((flags & MAP_TYPE) != MAP_PRIVATE &&
 	    (flags & MAP_TYPE) != MAP_SHARED)
 		return -EINVAL;
+#endif
 
 	if (!len)
 		return -EINVAL;

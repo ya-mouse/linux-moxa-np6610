@@ -5016,6 +5016,13 @@ static void setup_per_zone_lowmem_reserve(void)
 	calculate_totalreserve_pages();
 }
 
+#if 1	// add by Victor Yu. 02-08-2007
+static u64	victor_do_div(u64 n, u32 base)
+{
+	do_div(n, base);
+	return n;
+}
+#endif
 /**
  * setup_per_zone_wmarks - called when min_free_kbytes changes
  * or when memory is hot-{added|removed}
@@ -5041,7 +5048,11 @@ void setup_per_zone_wmarks(void)
 
 		spin_lock_irqsave(&zone->lock, flags);
 		tmp = (u64)pages_min * zone->present_pages;
+#if 0	// mask by Victor Yu. 02-08-2007
 		do_div(tmp, lowmem_pages);
+#else
+		tmp = victor_do_div(tmp, lowmem_pages);
+#endif
 		if (is_highmem(zone)) {
 			/*
 			 * __GFP_HIGH and PF_MEMALLOC allocations usually don't
@@ -5317,7 +5328,11 @@ void *__init alloc_large_system_hash(const char *tablename,
 	/* limit allocation size to 1/16 total memory by default */
 	if (max == 0) {
 		max = ((unsigned long long)nr_all_pages << PAGE_SHIFT) >> 4;
+#if 0	// mask by Victor Yu. 03-16-2007
 		do_div(max, bucketsize);
+#else
+		max = victor_do_div(max, bucketsize);
+#endif
 	}
 
 	if (numentries > max)
