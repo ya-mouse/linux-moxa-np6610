@@ -251,6 +251,12 @@ config MTD_NETtel
 	help
 	  Support for flash chips on NETtel/SecureEdge/SnapGear boards.
 
+config MTD_UC7112
+	tristate "CFI Flash device mapped on Moxa UC7112-LX board"
+	depends on MTD_CFI && MTD_PARTITIONS
+	help
+	  Support for flash chips on the Moxa UC7112-LX version2 platform.
+
 config MTD_BCM963XX
         tristate "Map driver for Broadcom BCM963xx boards"
         depends on BCM63XX
