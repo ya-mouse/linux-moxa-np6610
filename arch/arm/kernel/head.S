@@ -38,6 +38,18 @@
 #error KERNEL_RAM_VADDR must start at 0xXXXX8000
 #endif
 
+	.macro	victor_uart value
+	ldr	r7, =0x98200000
+	mov	r8, \value
+	strb	r8, [r7]
+	.endm
+
+	.macro	victor_vuart value
+	ldr	r7, =0xf9820000
+	mov	r8, \value
+	strb	r8, [r7]
+	.endm
+
 	.globl	swapper_pg_dir
 	.equ	swapper_pg_dir, KERNEL_RAM_VADDR - 0x4000
 
@@ -73,6 +85,7 @@
  */
 	__HEAD
 ENTRY(stext)
+	victor_uart #0x30
 	setmode	PSR_F_BIT | PSR_I_BIT | SVC_MODE, r9 @ ensure svc mode
 						@ and irqs disabled
 	mrc	p15, 0, r9, c0, c0		@ get processor id
@@ -80,6 +93,7 @@ ENTRY(stext)
 	movs	r10, r5				@ invalid processor (r5=0)?
  THUMB( it	eq )		@ force fixup-able long branch encoding
 	beq	__error_p			@ yes, error 'p'
+	victor_uart #0x31
 
 #ifndef CONFIG_XIP_KERNEL
 	adr	r3, 2f
@@ -345,6 +359,7 @@ __secondary_data:
  *  r13 = *virtual* address to jump to upon completion
  */
 __enable_mmu:
+	victor_uart #0x33
 #ifdef CONFIG_ALIGNMENT_TRAP
 	orr	r0, r0, #CR_A
 #else
@@ -384,11 +399,13 @@ ENDPROC(__enable_mmu)
  */
 	.align	5
 __turn_mmu_on:
+	victor_uart #'O'
 	mov	r0, r0
 	mcr	p15, 0, r0, c1, c0, 0		@ write control reg
 	mrc	p15, 0, r3, c0, c0, 0		@ read id reg
 	mov	r3, r3
 	mov	r3, r13
+	victor_vuart #'M'
 	mov	pc, r3
 __enable_mmu_end:
 ENDPROC(__turn_mmu_on)

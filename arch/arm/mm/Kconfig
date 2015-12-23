@@ -126,14 +126,15 @@ config CPU_ARM920T
 # ARM922T
 config CPU_ARM922T
 	bool "Support ARM922T processor" if ARCH_INTEGRATOR
-	select CPU_32v4T
-	select CPU_ABRT_EV4T
+	default y if ARCH_MOXART
+	select CPU_32v4
+	#select CPU_ABRT_NOMMU
+	select CPU_ABRT_EV4
 	select CPU_PABRT_LEGACY
-	select CPU_CACHE_V4WT
 	select CPU_CACHE_VIVT
-	select CPU_CP15_MMU
-	select CPU_COPY_V4WB if MMU
-	select CPU_TLB_V4WBI if MMU
+	select CPU_CP15
+	select CPU_COPY_V4WB
+	select CPU_TLB_FA if MMU
 	help
 	  The ARM922T is a version of the ARM920T, but with smaller
 	  instruction and data caches. It is used in Altera's
@@ -528,15 +529,15 @@ config CPU_CACHE_VIPT
 config CPU_CACHE_FA
 	bool
 
+config CPU_COPY_V4WB
+	bool
+
 if MMU
 # The copy-page model
 config CPU_COPY_V3
 	bool
 
 config CPU_COPY_V4WT
-	bool
-
-config CPU_COPY_V4WB
 	bool
 
 config CPU_COPY_FEROCEON

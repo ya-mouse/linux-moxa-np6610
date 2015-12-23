@@ -39,7 +39,12 @@
 /*
  * The size of one data cache line.
  */
-#define CACHE_DLINESIZE	32
+#define CACHE_DLINESIZE	16
+#if 1	/* add by Victor Yu. 02-08-2007 */
+#define CACHE_DSIZE	16384
+#define CACHE_ISIZE	16384
+#define CACHE_ILINESIZE 16
+#endif
 
 /*
  * The number of data cache segments.
@@ -97,6 +102,9 @@ ENTRY(cpu_arm922_reset)
 	mrc	p15, 0, ip, c1, c0, 0		@ ctrl register
 	bic	ip, ip, #0x000f			@ ............wcam
 	bic	ip, ip, #0x1100			@ ...i...s........
+#if 1   /* add by Victor Yu. 06-09-2005 */
+	bic	ip, ip, #0x0800			@ off BTB
+#endif
 	mcr	p15, 0, ip, c1, c0, 0		@ ctrl register
 	mov	pc, r0
 
@@ -105,7 +113,9 @@ ENTRY(cpu_arm922_reset)
  */
 	.align	5
 ENTRY(cpu_arm922_do_idle)
+#if 0   /* add by Victor Yu. 02-08-2007 */
 	mcr	p15, 0, r0, c7, c0, 4		@ Wait for interrupt
+#endif
 	mov	pc, lr
 
 
@@ -138,6 +148,7 @@ ENTRY(arm922_flush_user_cache_all)
  */
 ENTRY(arm922_flush_kern_cache_all)
 	mov	r2, #VM_EXEC
+#if 1   /* mask by Victor Yu. 05-30-2005 */
 	mov	ip, #0
 __flush_whole_cache:
 	mov	r1, #(CACHE_DSEGMENTS - 1) << 5	@ 8 segments
@@ -151,6 +162,21 @@ __flush_whole_cache:
 	mcrne	p15, 0, ip, c7, c5, 0		@ invalidate I cache
 	mcrne	p15, 0, ip, c7, c10, 4		@ drain WB
 	mov	pc, lr
+#else   /* add by Victor Yu. 05-30-2005 */
+	mov	ip, #0
+__flush_whole_cache:
+	mov	r1, #(CACHE_DSEGMENTS - 1) << 5	@ 8 segments
+1:	orr	r3, r1, #(CACHE_DENTRIES - 1) << 26 @ 64 entries
+2:	mcr	p15, 0, r3, c7, c14, 2		@ clean+invalidate D index
+	subs	r3, r3, #1 << 26
+	bcs	2b				@ entries 63 to 0
+	subs	r1, r1, #1 << 5
+	bcs	1b				@ segments 7 to 0
+	tst	r2, #VM_EXEC
+	mcrne	p15, 0, ip, c7, c5, 0		@ invalidate I cache
+	mcrne	p15, 0, ip, c7, c10, 4		@ drain WB
+	mov	pc, lr
+#endif
 
 /*
  *	flush_user_cache_range(start, end, flags)
@@ -163,6 +189,7 @@ __flush_whole_cache:
  *	- flags	- vm_flags describing address space
  */
 ENTRY(arm922_flush_user_cache_range)
+#if 1   /* mask by Victor Yu. 05-30-2005 */
 	mov	ip, #0
 	sub	r3, r1, r0			@ calculate total size
 	cmp	r3, #CACHE_DLIMIT
@@ -177,6 +204,22 @@ ENTRY(arm922_flush_user_cache_range)
 	tst	r2, #VM_EXEC
 	mcrne	p15, 0, ip, c7, c10, 4		@ drain WB
 	mov	pc, lr
+#else   /* add by Victor Yu. 05-30-2005 */
+	mov	ip, #0
+	sub	r3, r1, r0			@ calculate total size
+	cmp	r3, #CACHE_DLIMIT
+	bhs	__flush_whole_cache
+
+1:	mcr	p15, 0, r0, c7, c14, 1		@ clean+invalidate D entry
+	tst	r2, #VM_EXEC
+	mcrne	p15, 0, r0, c7, c5, 1		@ invalidate I entry
+	add	r0, r0, #CACHE_DLINESIZE
+	cmp	r0, r1
+	blo	1b
+	tst	r2, #VM_EXEC
+	mcrne	p15, 0, ip, c7, c10, 4		@ drain WB
+	mov	pc, lr
+#endif
 
 /*
  *	coherent_kern_range(start, end)
@@ -427,7 +470,11 @@ arm922_crval:
  */
 	.type	arm922_processor_functions, #object
 arm922_processor_functions:
-	.word	v4t_early_abort
+#if 1 /* mask by Victor Yu. 02-08-2007 */
+	.word	v4_early_abort
+#else
+	.word	nommu_early_abort
+#endif
 	.word	legacy_pabort
 	.word	cpu_arm922_proc_init
 	.word	cpu_arm922_proc_fin
@@ -464,8 +511,13 @@ cpu_arm922_name:
 
 	.type	__arm922_proc_info,#object
 __arm922_proc_info:
+#if 0	/* mask by Victor Yu. 02-08-2007 */
 	.long	0x41009220
 	.long	0xff00fff0
+#else
+	.long	0x66015261
+	.long	0xff01fff1
+#endif
 	.long   PMD_TYPE_SECT | \
 		PMD_SECT_BUFFERABLE | \
 		PMD_SECT_CACHEABLE | \
@@ -482,7 +534,12 @@ __arm922_proc_info:
 	.long	HWCAP_SWP | HWCAP_HALF | HWCAP_THUMB
 	.long	cpu_arm922_name
 	.long	arm922_processor_functions
+#if 0
 	.long	v4wbi_tlb_fns
+#else
+/* ifndef CONFIG_CPU_TLB_FA */
+	.long	fa_tlb_fns
+#endif
 	.long	v4wb_user_fns
 #ifndef CONFIG_CPU_DCACHE_WRITETHROUGH
 	.long	arm922_cache_fns

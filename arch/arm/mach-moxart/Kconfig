@@ -1,0 +1,83 @@
+menu "MOXART Options"
+	depends on ARCH_MOXART
+
+config SYS_CLK
+	int 'SysClk'
+	default 192000000
+	help
+	  Set your system clock.
+
+config UART_CLK
+	int 'UartClk'
+	default 14745600
+	help
+	  Set your uart clock.
+
+config LARGE_ALLOCS
+       bool "Allow allocating large blocks (> 1MB) of memory"
+       help
+          Allow the slab memory allocator to keep chains for very large
+          memory sizes - upto 32MB. You may need this if your system has
+          a lot of RAM, and you need to able to allocate very large
+          contiguous chunks. If unsure, say N.
+	
+config SKIP_DUMP_CPU_INFO
+	bool
+	default y
+	help
+	  ARM9TDMI cores do not support cache size
+	  recognition instructions which use MMU features.
+
+config ARCH_UC7110
+	bool "Moxa UC7110-LX hardware platform"
+	depends on ARCH_MOXART
+
+config ARCH_UC7112
+	bool "Moxa UC7112-LX hardware platform"
+	depends on ARCH_MOXART
+
+config ARCH_EM1240
+	bool "Moxa EM1240-LX hardware platform"
+	depends on ARCH_MOXART
+
+config ARCH_EM1240_IVTC
+	bool "Moxa EM1240-LX for IVTC ODM hardware platform"
+	depends on ARCH_MOXART
+
+config ARCH_EM1240_MT
+	bool "Moxa EM1240-LX for MT ODM hardware platform"
+	depends on ARCH_MOXART
+
+config ARCH_EM1220
+	bool "Moxa EM1220-LX hardware platform"
+	depends on ARCH_MOXART
+
+config ARCH_EM1220_DLIN
+	bool "Moxa EM1220-LX for DLIN ODM hardware platform"
+	depends on ARCH_MOXART
+
+config ARCH_EM1220_APIT
+	bool "Moxa EM1220-LX for APIT CV platform"
+	depends on ARCH_MOXART
+
+config ARCH_W321_GL2
+	bool "Moxa W321-LX for GL2 ODM hardware platform"
+	depends on ARCH_MOXART
+
+config ARCH_W315_EC
+	bool "Moxa W315-EC-LX for EC ODM hardware platform"
+	depends on ARCH_MOXART
+
+config ARCH_UC7101
+	bool "Moxa UC7101-LX hardware platform"
+	depends on ARCH_MOXART
+
+config ARCH_W311_TEST
+	bool "Moxa W311-LX hardware platform"
+	depends on ARCH_MOXART
+
+config ARCH_EM1110
+	bool "Moxa EM1110-LX hardware platform"
+	depends on ARCH_MOXART
+
+endmenu

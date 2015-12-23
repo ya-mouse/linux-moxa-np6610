@@ -5,7 +5,7 @@ config ARM
 	select HAVE_DMA_API_DEBUG
 	select HAVE_IDE
 	select HAVE_MEMBLOCK
-	select RTC_LIB
+	select RTC
 	select SYS_SUPPORTS_APM_EMULATION
 	select GENERIC_ATOMIC64 if (CPU_V6 || !CPU_32v6K || !AEABI)
 	select HAVE_OPROFILE if (HAVE_PERF_EVENTS)
@@ -681,6 +681,17 @@ config ARCH_SA1100
 	help
 	  Support for StrongARM 11x0 based boards.
 
+config ARCH_MOXART
+	bool "Moxa ART CPU"
+	depends on MMU
+	select CPU_32v4
+	select CPU_ARM922T
+	select ARCH_USES_GETTIMEOFFSET
+	help
+	  Moxa's ART 16/32-bit RISC MCU
+	  
+	  refer <http://www.moxa.com>.
+
 config ARCH_S3C2410
 	bool "Samsung S3C2410, S3C2412, S3C2413, S3C2416, S3C2440, S3C2442, S3C2443, S3C2450"
 	select GENERIC_GPIO
@@ -980,6 +991,8 @@ source "arch/arm/plat-spear/Kconfig"
 
 source "arch/arm/plat-tcc/Kconfig"
 
+source "arch/arm/mach-moxart/Kconfig"
+
 if ARCH_S3C2410
 source "arch/arm/mach-s3c2400/Kconfig"
 source "arch/arm/mach-s3c2410/Kconfig"
@@ -1073,6 +1086,15 @@ config MULTI_IRQ_HANDLER
 
 if !MMU
 source "arch/arm/Kconfig-nommu"
+endif
+if MMU
+config FLASH_MEM_BASE
+	hex 'FLASH Base Address'
+	default 0x00400000
+
+config FLASH_SIZE
+	hex 'FLASH Size'
+	default 0x00400000
 endif
 
 config ARM_ERRATA_411920
@@ -1623,7 +1645,7 @@ config LEDS_CPU
 config ALIGNMENT_TRAP
 	bool
 	depends on CPU_CP15_MMU
-	default y if !ARCH_EBSA110
+	default y if !ARCH_EBSA110 && !ARCH_MOXART
 	select HAVE_PROC_CPU if PROC_FS
 	help
 	  ARM processors cannot fetch/store information which is not

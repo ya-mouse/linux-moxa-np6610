@@ -128,6 +128,9 @@ textofs-$(CONFIG_PM_H1940)      := 0x00108000
 ifeq ($(CONFIG_ARCH_SA1100),y)
 textofs-$(CONFIG_SA1111) := 0x00208000
 endif
+ifeq ($(CONFIG_ARCH_MOXART),y)
+textofs-$(CONFIG_ARCH_MOXART) := 0x00008000
+endif
 
 # Machine directory name.  This list is sorted alphanumerically
 # by CONFIG_* macro name.
@@ -153,6 +156,7 @@ machine-$(CONFIG_ARCH_KS8695)		:= ks8695
 machine-$(CONFIG_ARCH_LOKI) 		:= loki
 machine-$(CONFIG_ARCH_LPC32XX)		:= lpc32xx
 machine-$(CONFIG_ARCH_MMP)		:= mmp
+machine-$(CONFIG_ARCH_MOXART)		:= moxart
 machine-$(CONFIG_ARCH_MSM)		:= msm
 machine-$(CONFIG_ARCH_MV78XX0)		:= mv78xx0
 machine-$(CONFIG_ARCH_MX1)		:= imx
@@ -283,6 +287,10 @@ bzImage: zImage
 
 zImage Image xipImage bootpImage uImage: vmlinux
 	$(Q)$(MAKE) $(build)=$(boot) MACHINE=$(MACHINE) $(boot)/$@
+
+linux.bin: vmlinux FORCE
+	@$(OBJCOPY) $(OBJCOPYFLAGS) vmlinux $@
+	@echo '  Kernel: $@ is ready'
 
 zinstall uinstall install: vmlinux
 	$(Q)$(MAKE) $(build)=$(boot) MACHINE=$(MACHINE) $@

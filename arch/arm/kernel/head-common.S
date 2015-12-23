@@ -159,6 +159,7 @@ __lookup_processor_type_data:
 	.size	__lookup_processor_type_data, . - __lookup_processor_type_data
 
 __error_p:
+	victor_uart #'p'
 #ifdef CONFIG_DEBUG_LL
 	adr	r0, str_p1
 	bl	printascii
@@ -187,6 +188,7 @@ __error:
 	str	r3, [r0], #4
 	str	r3, [r0], #4
 #endif
+	victor_uart #'e'
 1:	mov	r0, r0
 	b	1b
 ENDPROC(__error)

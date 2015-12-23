@@ -339,9 +339,11 @@ int module_finalize(const Elf32_Ehdr *hdr, const Elf_Shdr *sechdrs,
 	if (s)
 		fixup_pv_table((void *)s->sh_addr, s->sh_size);
 #endif
+#ifdef CONFIG_SMP_ON_UP
 	s = find_mod_section(hdr, sechdrs, ".alt.smp.init");
 	if (s && !is_smp())
 		fixup_smp((void *)s->sh_addr, s->sh_size);
+#endif
 	return 0;
 }
 

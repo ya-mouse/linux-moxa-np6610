@@ -43,4 +43,13 @@ typedef unsigned long pgprot_t;
 #define __pmd(x)        (x)
 #define __pgprot(x)     (x)
 
+struct page;
+struct vm_area_struct;
+
+struct cpu_user_fns {
+	void (*cpu_clear_user_highpage)(struct page *page, unsigned long vaddr);
+	void (*cpu_copy_user_highpage)(struct page *to, struct page *from,
+			unsigned long vaddr, struct vm_area_struct *vma);
+};
+
 #endif

@@ -32,6 +32,11 @@
  * numbers for r1.
  *
  */
+	.macro	victor_uart value
+	ldr	r7, =0x98200000
+	mov	r8, \value
+	strb	r8, [r7]
+	.endm
 	__HEAD
 ENTRY(stext)
 	setmode	PSR_F_BIT | PSR_I_BIT | SVC_MODE, r9 @ ensure svc mode
@@ -42,6 +47,7 @@ ENTRY(stext)
 	mrc	p15, 0, r9, c0, c0		@ get processor id
 #endif
 	bl	__lookup_processor_type		@ r5=procinfo r9=cpuid
+	victor_uart #0x37
 	movs	r10, r5				@ invalid processor (r5=0)?
 	beq	__error_p				@ yes, error 'p'
 
@@ -60,6 +66,7 @@ __after_proc_init:
 	 * CP15 system control register value returned in r0 from
 	 * the CPU init function.
 	 */
+	mrc	p15, 0, r0, c1, c0, 0		@ read control reg
 #ifdef CONFIG_ALIGNMENT_TRAP
 	orr	r0, r0, #CR_A
 #else
@@ -67,12 +74,16 @@ __after_proc_init:
 #endif
 #ifdef CONFIG_CPU_DCACHE_DISABLE
 	bic	r0, r0, #CR_C
+#else	/* add by Victor Yu. 02-09-2007 */
+	orr	r0, r0, #CR_C
 #endif
 #ifdef CONFIG_CPU_BPREDICT_DISABLE
 	bic	r0, r0, #CR_Z
 #endif
 #ifdef CONFIG_CPU_ICACHE_DISABLE
 	bic	r0, r0, #CR_I
+#else	/* add by Victor Yu. 02-09-2007 */
+	orr	r0, r0, #CR_I
 #endif
 #ifdef CONFIG_CPU_HIGH_VECTOR
 	orr	r0, r0, #CR_V

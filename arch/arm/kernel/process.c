@@ -225,6 +225,14 @@ int __init reboot_setup(char *str)
 
 __setup("reboot=", reboot_setup);
 
+#if 1	// add by Victor Yu. 03-06-2007
+	#if defined(CONFIG_ARCH_W311_TEST)	// add by Victor Yu. 07-10-2008
+#define SW_READY_LED_OFF()	*(volatile unsigned int *)(CPE_GPIO_BASE) |= (1<<4)
+	#else
+#define SW_READY_LED_OFF()	*(volatile unsigned int *)(CPE_GPIO_BASE) |= (1<<27)
+	#endif
+#endif
+
 void machine_shutdown(void)
 {
 #ifdef CONFIG_SMP
@@ -235,6 +243,7 @@ void machine_shutdown(void)
 void machine_halt(void)
 {
 	machine_shutdown();
+	SW_READY_LED_OFF();	// add by Victor Yu. 03-06-2007
 	while (1);
 }
 
@@ -243,10 +252,12 @@ void machine_power_off(void)
 	machine_shutdown();
 	if (pm_power_off)
 		pm_power_off();
+	SW_READY_LED_OFF();	// add by Victor Yu. 03-06-2007
 }
 
 void machine_restart(char *cmd)
 {
+	SW_READY_LED_OFF();	// add by Victor Yu. 03-06-2007
 	machine_shutdown();
 	arm_pm_restart(reboot_mode, cmd);
 }

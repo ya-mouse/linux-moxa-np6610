@@ -570,6 +570,14 @@ __common_mmu_cache_on:
 		.align	5			@ cache line aligned
 1:		mcr	p15, 0, r0, c1, c0, 0	@ load control register
 		mrc	p15, 0, r0, c1, c0, 0	@ and read it back to
+// following add by Victor Yu. 06-08-2005
+#if 1
+#ifdef CONFIG_ARCH_MOXART
+		mov	r0, r0
+		mov	r0, r0
+#endif
+#endif
+// above add by Victor Yu. 06-08-2005
 		sub	pc, lr, r0, lsr #32	@ properly flush pipeline
 #endif
 
@@ -729,6 +737,14 @@ proc_types:
 		W(b)	__armv4_mmu_cache_off
 		W(b)	__armv4_mmu_cache_flush
 
+#ifdef CONFIG_ARCH_MOXART
+		.word	0x66015261		@ MOXA ART
+		.word	0xff01fff1
+		W(b)	__armv4_mmu_cache_on
+		W(b)	__armv4_mmu_cache_off
+		W(b)	__armv4_mmu_cache_flush
+#endif
+
 		.word	0x00050000		@ ARMv5TE
 		.word	0x000f0000
 		W(b)	__armv4_mmu_cache_on
@@ -810,6 +826,14 @@ __armv4_mmu_cache_off:
 		mcr	p15, 0, r0, c7, c7	@ invalidate whole cache v4
 		mcr	p15, 0, r0, c8, c7	@ invalidate whole TLB v4
 #endif
+// following add by Victor Yu. 06-08-2005
+#if 1
+#ifdef CONFIG_ARCH_MOXART
+		mov	r0, r0
+		mov	r0, r0
+#endif
+#endif
+// above add by Victor Yu. 06-08-2005
 		mov	pc, lr
 
 __armv7_mmu_cache_off:
@@ -975,6 +999,12 @@ __armv4_mmu_cache_flush:
 		mov	r11, #8
 		mov	r11, r11, lsl r3	@ cache line size in bytes
 no_cache_id:
+// following add by Victor Yu. 06-08-2005
+#ifdef CONFIG_ARCH_MOXART
+		mov	r1, #0
+		mcr     p15, 0, r1, c7, c10, 0  @ clean D cache
+#endif
+// above add by Victor Yu. 06-08-2005
 		mov	r1, pc
 		bic	r1, r1, #63		@ align to longest cache line
 		add	r2, r1, r2

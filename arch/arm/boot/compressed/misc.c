@@ -28,8 +28,9 @@ unsigned int __machine_arch_type;
 
 #include <asm/unaligned.h>
 
-
+#if 0 // mask by Victor Yu. 06-08-2007
 static void putstr(const char *ptr);
+#endif
 extern void error(char *x);
 
 #include <mach/uncompress.h>
@@ -90,6 +91,7 @@ static void icedcc_putc(int ch)
 #define putc(ch)	icedcc_putc(ch)
 #endif
 
+#if 0  // mask by Vitor Yu. 06-08-2007
 static void putstr(const char *ptr)
 {
 	char c;
@@ -102,7 +104,7 @@ static void putstr(const char *ptr)
 
 	flush();
 }
-
+#endif
 
 void *memcpy(void *__dest, __const void *__src, size_t __n)
 {
