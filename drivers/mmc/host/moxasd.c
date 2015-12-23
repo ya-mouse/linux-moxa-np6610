@@ -1,0 +1,742 @@
+/*
+ *  linux/drivers/mmc/moxasd.c - Moxa CPU SD/MMC driver
+ *
+ *  Copyright (C) 2005 Moxa Tech., All Rights Reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
+ */
+#if 1   // add by Victor Yu. 02-09-2007
+#include <linux/version.h>
+#endif
+#include <mach/dma.h>
+#include <mach/moxa.h>
+#include <mach/cpe_int.h>
+#include <linux/module.h>
+#include <linux/init.h>
+#include <linux/ioport.h>
+#include <linux/platform_device.h>
+#include <linux/delay.h>
+#include <linux/interrupt.h>
+#include <linux/blkdev.h>
+#include <linux/dma-mapping.h>
+#include <linux/mmc/host.h>
+#include <linux/sched.h>
+#include <linux/mmc/mmc.h>
+#include <linux/mmc/sd.h>
+
+#include <asm/dma.h>
+#include <asm/io.h>
+#include <asm/irq.h>
+#include <asm/sizes.h>
+#include <mach/gpio.h>
+
+#include "moxasd.h"
+
+#if 0	// mask by Victor Yu. 03-19-2007
+#define MSD_RETRY_COUNT		1000
+#else
+#define MSD_RETRY_COUNT		100
+#endif
+//#define CONFIG_MMC_DEBUG
+#ifdef CONFIG_MMC_DEBUG
+#define DBG(x...)	printk(x)
+#else
+#define DBG(x...)
+#endif
+
+#define MMC_RSP_LONG MMC_RSP_PRESENT
+#define MMC_RSP_SHORT MMC_RSP_PRESENT
+
+struct moxasd_host {
+	struct mmc_host		*mmc;
+	spinlock_t		lock;
+	moxasd_reg		*reg;
+	apb_dma_priv		*dma;
+#ifdef MSD_SUPPORT_GET_CLOCK
+	unsigned int		sysclk;
+#endif
+	struct mmc_request	*mrq;
+	struct mmc_data		*data;
+
+	struct scatterlist	*cur_sg;	/* Current SG entry */
+        unsigned int		num_sg;		/* Number of entries left */
+        void			*mapped_sg;	/* vaddr of mapped sg */
+        unsigned int		remain;		/* Data left in curren entry */
+        int			size;		/* Total size of transfer */
+
+	struct tasklet_struct	card_change_tasklet;
+	struct tasklet_struct	fifo_run_tasklet;
+};
+
+static inline void moxasd_init_sg(struct moxasd_host* host, struct mmc_data* data)
+{
+	/*
+	 * Get info. about SG list from data structure.
+	 */
+	host->cur_sg = data->sg;
+	host->num_sg = data->sg_len;
+
+	host->remain = host->cur_sg->length;
+#if 1   // add by Victor Yu. 07-04-2007
+	if ( host->remain > host->size )
+		host->remain = host->size;
+	host->mapped_sg = NULL;
+#endif
+	data->error = 0;
+}
+
+static inline int moxasd_next_sg(struct moxasd_host* host)
+{
+#if 1   // add by Victor Yu. 07-04-2007
+	struct mmc_data *data=host->data;
+#endif
+	/*
+	 * Skip to next SG entry.
+	 */
+	host->cur_sg++;
+	host->num_sg--;
+
+	/*
+	 * Any entries left?
+	 */
+	if (host->num_sg > 0) {
+		host->remain = host->cur_sg->length;
+#if 1   // add by Victor Yu. 07-04-2007
+		{
+		int     remain;
+		remain = host->size - data->bytes_xfered;
+		if ( remain > 0 && remain < host->remain ) {
+			host->remain = remain;
+		}
+		}
+#endif
+	}
+
+	return host->num_sg;
+}
+
+static inline char *moxasd_kmap_sg(struct moxasd_host* host)
+{
+	host->mapped_sg = kmap_atomic(sg_page(host->cur_sg), KM_BIO_SRC_IRQ);
+	return host->mapped_sg + host->cur_sg->offset;
+}
+
+static void	moxasd_do_fifo(struct moxasd_host *host, struct mmc_data *data)
+{
+	char	*buffer;
+	int	wcnt, i;
+
+#if 1   // add by Victor Yu. 07-06-2007
+	if ( host->mapped_sg ) {
+		kunmap_atomic(host->mapped_sg, KM_BIO_SRC_IRQ);
+		moxasd_next_sg(host);
+	}
+#endif
+	if ( host->size == data->bytes_xfered ) {
+		return;
+	}
+	buffer = moxasd_kmap_sg(host);
+	if ( host->size > MSD_FIFO_LENB && host->dma ) {
+		apb_dma_conf_param	param;
+		param.size = host->remain;
+		param.burst_mode = APB_DMAB_BURST_MODE;
+		param.data_width = APB_DMAB_DATA_WIDTH_4;
+		if ( data->flags & MMC_DATA_WRITE ) {
+			param.source_addr = (unsigned int)buffer;
+			param.dest_addr = (unsigned int)&host->reg->data_window;
+			param.dest_inc = APB_DMAB_DEST_INC_0;
+			param.source_inc = APB_DMAB_DEST_INC_4_16;
+			param.dest_sel = APB_DMAB_DEST_APB;
+			param.source_sel = APB_DMAB_SOURCE_AHB;
+		} else { 
+			param.dest_addr = (unsigned int)buffer;
+			param.source_addr = (unsigned int)&host->reg->data_window;
+			param.source_inc = APB_DMAB_DEST_INC_0;
+			param.dest_inc = APB_DMAB_DEST_INC_4_16;
+			param.source_sel = APB_DMAB_DEST_APB;
+			param.dest_sel = APB_DMAB_SOURCE_AHB;
+		}
+		data->bytes_xfered += host->remain;
+		apb_dma_conf(host->dma, &param);
+		apb_dma_enable(host->dma);
+	} else {
+		wcnt = host->remain >> 2;
+		if ( data->flags & MMC_DATA_WRITE ) {
+			for ( i=0; i<wcnt; i++, buffer+=4 )
+				writel(*(unsigned int *)buffer, &host->reg->data_window);
+		} else {
+			for ( i=0; i<wcnt; i++, buffer+=4 )
+				*(unsigned int *)buffer = readl(&host->reg->data_window);
+		}
+		wcnt <<= 2;
+		host->remain -= wcnt;
+		data->bytes_xfered += wcnt;
+	}
+}
+
+static void moxasd_request_done(struct moxasd_host *host)
+{
+	struct mmc_request	*mrq=host->mrq;
+
+	if ( mrq == NULL ) {
+		return;
+	}
+	host->mrq = NULL;
+	host->data = NULL;
+	mmc_request_done(host->mmc, mrq);
+}
+
+static void moxasd_prepare_data(struct moxasd_host *host, struct mmc_data *data)
+{
+	unsigned int	timeout, datactrl;
+#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,9)	// add by Victor Yu. 03-07-2007
+	int		blksz_bits;
+#endif	// LINUX_VERSION_CODE
+
+	host->data = data;
+	// initialize the data size
+#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,9)	// add by Victor Yu. 03-07-2007
+	host->size = data->blocks * data->blksz;
+	blksz_bits = ffs(data->blksz) - 1;
+	BUG_ON(1 << blksz_bits != data->blksz);
+#else
+	host->size = data->blocks << data->blksz_bits;
+#endif	// LINUX_VERSION_CODE
+	moxasd_init_sg(host, data);
+
+	// initialize the timeout value
+	timeout = (host->mmc->f_max/1000) * (data->timeout_ns/1000);
+	timeout *= 2;
+
+	// initialize the data control
+#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,9)	// add by Victor Yu. 03-07-2007
+	datactrl = (blksz_bits & MSD_BLK_SIZE_MASK) | MSD_DATA_EN;
+#else
+	datactrl = (data->blksz_bits & MSD_BLK_SIZE_MASK) | MSD_DATA_EN;
+#endif	// LINUX_VERSION_CODE
+	if ( data->flags & MMC_DATA_WRITE ) {
+		datactrl |= MSD_DATA_WRITE;
+	}
+	if ( host->size > MSD_FIFO_LENB && host->dma ) {
+		datactrl |= MSD_DMA_EN;
+	}
+	writel(timeout, &host->reg->data_timer);
+	writel(host->size, &host->reg->data_length);
+	writel(datactrl, &host->reg->data_control);
+
+	if ( host->size > MSD_FIFO_LENB && host->dma ) {
+		writel(MSD_INT_CARD_CHANGE, &host->reg->interrupt_mask);
+		moxasd_do_fifo(host, data);
+		//tasklet_schedule(&host->fifo_run_tasklet);
+	} else {
+		writel(MSD_INT_FIFO_URUN|MSD_INT_FIFO_ORUN|MSD_INT_CARD_CHANGE, &host->reg->interrupt_mask);
+	}
+}
+
+static void moxasd_send_command(struct moxasd_host *host, struct mmc_command *cmd)
+{
+	unsigned int	status, cmdctrl;
+	int		retry=0;
+
+#if 1	// add by Victor Yu. 03-19-2007
+	cmd->error = ETIMEDOUT;
+#endif
+
+	// first clear status
+	writel(MSD_CLR_RSP_TIMEOUT|MSD_CLR_RSP_CRC_OK|MSD_CLR_RSP_CRC_FAIL|MSD_CLR_CMD_SENT, &host->reg->clear);
+
+	// write argument
+	writel(cmd->arg, &host->reg->argument);
+
+	// write command
+	cmdctrl = cmd->opcode & MSD_CMD_IDX_MASK;
+	if ( cmdctrl == SD_APP_SET_BUS_WIDTH ||
+	     cmdctrl == SD_APP_OP_COND ||
+	     cmdctrl == SD_APP_SEND_SCR )	// this is SD application specific command
+		cmdctrl |= MSD_APP_CMD;
+	if ( cmd->flags & MMC_RSP_LONG )
+		cmdctrl |= (MSD_LONG_RSP|MSD_NEED_RSP);
+	if ( cmd->flags & MMC_RSP_SHORT )
+		cmdctrl |= MSD_NEED_RSP;
+	writel(cmdctrl|MSD_CMD_EN, &host->reg->command);
+
+	// wait response
+	while ( retry++ < MSD_RETRY_COUNT ) {
+		status = readl(&host->reg->status);
+		if ( status & MSD_CARD_DETECT ) {	// card is removed
+			cmd->error = ETIMEDOUT;
+			break;
+		}
+		if ( cmdctrl & MSD_NEED_RSP ) {
+			if ( status & MSD_RSP_TIMEOUT ) {
+				writel(MSD_CLR_RSP_TIMEOUT, &host->reg->clear);
+				cmd->error = ETIMEDOUT;
+				break;
+			}
+#if 0
+			if ( status & MSD_RSP_CRC_FAIL ) {
+#else
+			if ( (cmd->flags&MMC_RSP_CRC) && (status&MSD_RSP_CRC_FAIL) ) {
+#endif
+				writel(MSD_CLR_RSP_CRC_FAIL, &host->reg->clear);
+				cmd->error = EILSEQ;
+				break;
+			}
+			if ( status & MSD_RSP_CRC_OK ) {
+				writel(MSD_CLR_RSP_CRC_OK, &host->reg->clear);
+				// read response
+				cmd->resp[0] = readl(&host->reg->response0);
+				cmd->resp[1] = readl(&host->reg->response1);
+				cmd->resp[2] = readl(&host->reg->response2);
+				cmd->resp[3] = readl(&host->reg->response3);
+				cmd->error = 0;
+				break;
+			}
+		} else {
+			if ( status & MSD_CMD_SENT ) {
+				writel(MSD_CLR_CMD_SENT, &host->reg->clear);
+				cmd->error = 0;
+				break;
+			}
+		}
+	}
+}
+
+#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,12) // add by Victor Yu. 02-16-2007
+static irqreturn_t moxasd_irq(int irq, void *devid)
+#else
+static irqreturn_t moxasd_irq(int irq, void *devid, struct pt_regs *regs)
+#endif	// LINUX_VERSION_CODE
+{
+	struct moxasd_host	*host=devid;
+	unsigned int		status;
+
+	// get the interrupt status
+	status = readl(&host->reg->status);
+	
+	// acknowledge the interurpt
+	if ( status & MSD_CARD_CHANGE ) {	// has card inserted or removed
+		//writel(MSD_CLR_CARD_CHANGE, &host->reg->clear);
+		tasklet_schedule(&host->card_change_tasklet);
+	}
+
+	if ( status & (MSD_FIFO_ORUN|MSD_FIFO_URUN) ) {
+		writel(status&(MSD_FIFO_ORUN|MSD_FIFO_URUN), &host->reg->clear);
+		tasklet_schedule(&host->fifo_run_tasklet);
+	}
+
+	return IRQ_HANDLED;
+}
+
+static void moxasd_fifo_run(unsigned long param)
+{
+	struct moxasd_host	*host=(struct moxasd_host *)param;
+	struct mmc_data		*data;
+	unsigned long		flags;
+
+	spin_lock_irqsave(&host->lock, flags);
+	host = (struct moxasd_host *)param;
+	data = host->data;
+	if ( host->mrq == NULL || data == NULL ) {
+		spin_unlock_irqrestore(&host->lock, flags);
+		return;
+	}
+	moxasd_do_fifo(host, data);
+	if ( host->size == data->bytes_xfered ) {
+#if 1   // mask by Victor Yu. 07-04-2007
+		unsigned int            status;
+		while ( 1 ) {
+			status = readl(&host->reg->status);
+			if ( status & (MSD_DATA_CRC_OK|MSD_DATA_CRC_FAIL|MSD_DATA_END) )
+				break;
+			current->state = TASK_INTERRUPTIBLE;
+			schedule_timeout(5);
+		}
+		if ( status & MSD_DATA_CRC_OK ) {
+			writel(MSD_CLR_DATA_CRC_OK, &host->reg->clear);
+		}
+		if ( status & MSD_DATA_CRC_FAIL ) {
+			writel(MSD_CLR_DATA_CRC_FAIL, &host->reg->clear);
+			data->error = ETIMEDOUT;
+		}
+		if ( status & MSD_DATA_END ) {
+			writel(MSD_CLR_DATA_END, &host->reg->clear);
+		}
+#endif
+		if ( data->stop ) {
+			moxasd_send_command(host, data->stop);
+		}
+	} else {
+		spin_unlock_irqrestore(&host->lock, flags);
+		return;
+	}
+	
+	moxasd_request_done(host);
+	spin_unlock_irqrestore(&host->lock, flags);
+}
+
+static void moxasd_card_change(unsigned long param)
+{
+	struct moxasd_host	*host=(struct moxasd_host *)param;
+	unsigned int		status;
+	int			delay;
+	unsigned long		flags;
+
+	spin_lock_irqsave(&host->lock, flags);
+#if LINUX_VERSION_CODE	> KERNEL_VERSION(2,6,9)	// add by Victor Yu. 03-07-2007
+	udelay(1000);
+	udelay(1000);
+	udelay(1000);
+#else
+	udelay(3000);
+#endif	// LINUX_VERSION_CODE
+	status = readl(&host->reg->status);
+	if ( status & MSD_CARD_DETECT ) {	// card removed
+		printk("Moxa CPU SD/MMC card is removed.\n");
+		delay = 0;
+		if ( host->data ) {
+			if ( host->dma && host->size > MSD_FIFO_LENB )
+				apb_dma_disable(host->dma);
+			host->size = host->data->bytes_xfered;
+			moxasd_fifo_run(*(unsigned long *)host);
+			host->data->error = ETIMEDOUT;
+			moxasd_request_done(host);
+		}
+	} else {	// card inserted
+		printk("Moxa CPU SD/MMC card is inserted.\n");
+		if ( readl(&host->reg->clock_control) & MSD_CLK_SD ) {	// SD
+			host->mmc->f_max = 25000000;
+//			host->mmc->mode = MMC_MODE_SD;
+		} else {
+			host->mmc->f_max = 20000000;
+//			host->mmc->mode = MMC_MODE_MMC;
+		}
+		delay = 500;
+	}
+	writel(MSD_CLR_CARD_CHANGE, &host->reg->clear);
+	spin_unlock_irqrestore(&host->lock, flags);
+	mmc_detect_change(host->mmc, msecs_to_jiffies(delay));
+}
+
+static void moxasd_dma_irq(void *param)
+{
+	struct moxasd_host	*host=(struct moxasd_host *)param;
+
+	if ( host )
+		tasklet_schedule(&host->fifo_run_tasklet);
+}
+
+static void moxasd_request(struct mmc_host *mmc, struct mmc_request *mrq)
+{
+	struct moxasd_host	*host=mmc_priv(mmc);
+	struct mmc_command	*cmd;
+	unsigned long		flags;
+
+	spin_lock_irqsave(&host->lock, flags);
+	host->mrq = mrq;
+	cmd = mrq->cmd;
+
+	// if no card inserted, return timeout error
+	if ( readl(&host->reg->status) & MSD_CARD_DETECT ) {	// card is removed
+		cmd->error = ETIMEDOUT;
+		goto request_done;
+	}
+
+	// request include data or not
+	if ( cmd->data ) {
+		moxasd_prepare_data(host, cmd->data);
+	}
+
+	// do request command
+	moxasd_send_command(host, cmd);
+
+	if ( cmd->data && cmd->error == 0 ) {
+		spin_unlock_irqrestore(&host->lock, flags);
+		return;
+	}
+
+request_done:
+	moxasd_request_done(host);
+	spin_unlock_irqrestore(&host->lock, flags);
+}
+
+#define MIN_POWER	(MMC_VDD_35_36 - MSD_SD_POWER_MASK)
+static void moxasd_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
+{
+	struct moxasd_host	*host=mmc_priv(mmc);
+	unsigned long		flags;
+
+	spin_lock_irqsave(&host->lock, flags);
+	if (ios->clock) {
+		int	div;
+#ifdef MSD_SUPPORT_GET_CLOCK
+		div = (host->sysclk / (host->mmc->f_max * 2)) - 1;
+#else
+		div = (APB_CLK / (host->mmc->f_max * 2)) - 1;
+#endif
+		if ( div > MSD_CLK_DIV_MASK )
+			div = MSD_CLK_DIV_MASK;
+		else if ( div < 0 )
+			div = 0;
+//		if ( host->mmc->mode == MMC_MODE_SD )
+			div |= MSD_CLK_SD;
+		writel(div, &host->reg->clock_control);
+	} else if ( !(readl(&host->reg->clock_control) & MSD_CLK_DIS) ) {
+		/*
+		 * Ensure that the clock is off.
+		 */
+		writel(readl(&host->reg->clock_control)|MSD_CLK_DIS, &host->reg->clock_control);
+	}
+
+	if ( ios->power_mode == MMC_POWER_OFF ) {
+		writel(readl(&host->reg->power_control)&~MSD_SD_POWER_ON, &host->reg->power_control);
+	} else {
+		unsigned short	power;
+		if ( ios->vdd < MIN_POWER )
+			power = 0;
+		else
+			power = ios->vdd - MIN_POWER;
+		writel(MSD_SD_POWER_ON|(unsigned int)power, &host->reg->power_control);
+	}
+
+#if 1
+	if ( ios->bus_width == MMC_BUS_WIDTH_1 ) {
+		writel(MSD_SINGLE_BUS, &host->reg->bus_width);
+	} else {
+		writel(MSD_WIDE_BUS, &host->reg->bus_width);
+	}
+#endif
+	spin_unlock_irqrestore(&host->lock, flags);
+}
+
+/* 
+ * To check write protect or not. Return 0 for none, 1 for write protect.
+ */
+static int	moxasd_get_ro(struct mmc_host *mmc)
+{
+	struct moxasd_host	*host=mmc_priv(mmc);
+
+	if ( readl(&host->reg->status) & MSD_WRITE_PROT )
+		return 1;
+	else
+		return 0;
+}
+
+static struct mmc_host_ops moxasd_ops = {
+	.request	= moxasd_request,
+	.set_ios	= moxasd_set_ios,
+	.get_ro		= moxasd_get_ro,
+};
+
+static int moxasd_probe(struct device *dev)
+{
+	struct mmc_host		*mmc;
+	struct moxasd_host	*host=NULL;
+	int			ret;
+
+	printk("moxasd_probe\n");
+	mmc = mmc_alloc_host(sizeof(struct moxasd_host), dev);
+	if (!mmc) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	mmc->ops = &moxasd_ops;
+	mmc->f_min = 400000;
+	mmc->f_max = 25000000;
+//	mmc->mode = MMC_MODE_SD;
+#if 0
+	mmc->ocr_avail = 0xffff00;	// support 2.0v - 3.6v power
+#else
+	mmc->ocr_avail = MMC_VDD_32_33 | MMC_VDD_33_34;
+	mmc->caps = MMC_CAP_4_BIT_DATA;
+	mmc->max_segs = 128;
+	mmc->max_seg_size = 128 * 512;
+	mmc->max_req_size = 128 * 512;
+	mmc->max_blk_size = 2048;
+	mmc->max_blk_count = 65535;
+#endif
+
+	printk("mmc_priv\n");
+	host = mmc_priv(mmc);
+	host->mmc = mmc;
+	spin_lock_init(&host->lock);
+	tasklet_init(&host->card_change_tasklet, moxasd_card_change, (unsigned long)host);
+	tasklet_init(&host->fifo_run_tasklet, moxasd_fifo_run, (unsigned long)host);
+	host->reg = (moxasd_reg *)CPE_SD_BASE;
+	printk("apb_dma_alloc\n");
+	host->dma = apb_dma_alloc(APB_DMA_SD_REQ_NO);
+	if ( host->dma ) {
+		apb_dma_set_irq(host->dma, moxasd_dma_irq, host);
+	}
+
+#ifdef MSD_SUPPORT_GET_CLOCK
+	// get system clock
+	{
+	unsigned int	mul, val, div;
+	mul = (*(volatile unsigned int *)(CPE_PMU_BASE+0x30) >> 3) & 0x1ff;
+	val = (*(volatile unsigned int *)(CPE_PMU_BASE+0x0c) >> 4) & 0x7;
+	switch ( val ) {
+	case 0 :	div = 2;	break;
+	case 1 :	div = 3;	break;
+	case 2 :	div = 4;	break;
+	case 3 :	div = 6;	break;
+	case 4 :	div = 8;	break;
+	default :	div = 2;	break;
+	}
+	host->sysclk = (38684*mul + 10000) / (div * 10000);
+	host->sysclk = (host->sysclk * 1000000) / 2;
+	}
+#endif
+
+	// change I/O multiplexing to SD, so the GPIO 17-10 will be fail
+//	mcpu_gpio_mp_clear(0xff<<10);
+#ifdef CONFIG_ARCH_UC7101
+#define SD_LED	(1<<30)
+//	mcpu_gpio_mp_set(SD_LED);
+//	mcpu_gpio_inout(SD_LED, MCPU_GPIO_OUTPUT);
+//	mcpu_gpio_set(SD_LED, MCPU_GPIO_HIGH);
+#endif
+
+	/*
+	 * Ensure that the host controller is shut down, and setup
+	 * with our defaults.
+	 */
+	printk("disable all interrupts\n");
+	writel(0, &host->reg->interrupt_mask);	// disable all interrupt
+	writel(MSD_SDC_RST, &host->reg->command);	// reset chip
+	printk("wait for reset finished\n");
+	while ( readl(&host->reg->command) & MSD_SDC_RST);	// wait for reset finished
+	printk("...done\n");
+	writel(0, &host->reg->interrupt_mask);	// disable all interrupt
+
+	// to check any card inserted or not
+	if ( !(readl(&host->reg->status) & MSD_CARD_DETECT) ) {	// is inserted
+		if ( readl(&host->reg->clock_control) & MSD_CLK_SD ) {	// is SD card
+			mmc->f_max = 25000000;
+//			mmc->mode = MMC_MODE_SD;
+		} else {	// is MMC card
+			mmc->f_max = 20000000;
+//			mmc->mode = MMC_MODE_MMC;
+		}
+	}
+
+	mmc->caps = MMC_CAP_4_BIT_DATA;
+	writel(MSD_WIDE_BUS, &host->reg->bus_width);
+
+	printk("cpe_int_set_irq\n");
+	cpe_int_set_irq(IRQ_SD, EDGE, H_ACTIVE);
+	ret = request_irq(IRQ_SD, moxasd_irq, IRQF_DISABLED, "MOXASD", host);
+	if (ret)
+		goto out;
+
+	//writel(MSD_INT_CARD_CHANGE|MSD_INT_FIFO_ORUN|MSD_INT_FIFO_URUN, &host->reg->interrupt_mask);
+	writel(MSD_INT_CARD_CHANGE, &host->reg->interrupt_mask);
+	dev_set_drvdata(dev, mmc);
+	mmc_add_host(mmc);
+
+	return 0;
+
+ out:
+	if (mmc)
+		mmc_free_host(mmc);
+
+	return ret;
+}
+
+static int moxasd_remove(struct device *dev)
+{
+	struct mmc_host	*mmc=dev_get_drvdata(dev);
+
+	dev_set_drvdata(dev, NULL);
+
+	if (mmc) {
+		struct moxasd_host	*host=mmc_priv(mmc);
+
+		mmc_remove_host(mmc);
+
+		// stop SD/MMC
+		if ( host->dma ) {
+			apb_dma_disable(host->dma);
+			apb_dma_release_irq(host->dma);
+			apb_dma_release(host->dma);
+		}
+		writel(0, &host->reg->interrupt_mask);
+		writel(0, &host->reg->power_control);
+		writel(readl(&host->reg->clock_control)|MSD_CLK_DIS, &host->reg->clock_control);
+
+		free_irq(IRQ_SD, host);
+		tasklet_kill(&host->card_change_tasklet);
+		tasklet_kill(&host->fifo_run_tasklet);
+
+		mmc_free_host(mmc);
+	}
+	return 0;
+}
+
+static struct platform_device moxasd_device = {
+	.name	= "moxart-sd",
+	.id	= -1,
+};
+
+static struct device_driver moxasd_driver = {
+	.name		= "moxart-sd",
+	.bus		= &platform_bus_type,
+	.probe		= moxasd_probe,
+	.remove		= moxasd_remove,
+};
+
+#if 0	// add by Victor Yu. 03-08-2007
+extern int	moxa_gpio_sd_used_flag;	// define on arch/arm/kernel/armksyms.c
+#endif
+static int __init moxasd_init(void)
+{
+	int	ret;
+
+	printk("Moxa CPU SD/MMC Device Driver V1.0 initialize ");
+#if 0	// add by Victor Yu. 03-08-2007
+	{
+	unsigned long	flags;
+	local_irq_save(flags);
+	if ( moxa_gpio_sd_used_flag ) {
+		printk("The IO has used by other device driver !\n");
+		local_irq_restore(flags);
+		return -ENODEV;
+	}
+	moxa_gpio_sd_used_flag = 1;
+	local_irq_restore(flags);
+	}
+#endif
+	platform_device_register(&moxasd_device);
+	ret = driver_register(&moxasd_driver);
+	if ( ret ) {
+		printk("Modules load fail !\n");
+		platform_device_unregister(&moxasd_device);
+	} else {
+		printk("Modules load OK.\n");
+	}
+	return ret;
+}
+
+static void __exit moxasd_exit(void)
+{
+	platform_device_unregister(&moxasd_device);
+	driver_unregister(&moxasd_driver);
+#if 0	// add by Victor Yu. 12-05-2007
+	{
+	unsigned long	flags;
+	local_irq_save(flags);
+	moxa_gpio_sd_used_flag = 0;
+	local_irq_restore(flags);
+	}
+#endif
+}
+
+module_init(moxasd_init);
+module_exit(moxasd_exit);
+
+MODULE_DESCRIPTION("Moxa CPU SD/Multimedia Card Interface Driver");
+MODULE_LICENSE("GPL");

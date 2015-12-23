@@ -68,6 +68,16 @@ config MMC_SDHCI_PCI
 
 	  If unsure, say N.
 
+config MMC_MOXART
+	tristate "Moxa CPU SD/Multimedia Card Interface support"
+	depends on ARCH_MOXART && MMC
+	help
+	  This selects the Moxa(R) CPU(R) SD/Multimedia card Interface.
+	  If you have a Moxa(R) CPU platform with a SD/Multimedia Card slot,
+	  say Y or M here.
+
+	  If unsure, say N.
+
 config MMC_RICOH_MMC
 	bool "Ricoh MMC Controller Disabler  (EXPERIMENTAL)"
 	depends on MMC_SDHCI_PCI
